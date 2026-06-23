@@ -54,10 +54,7 @@ async fn main() {
     dotenvy::dotenv().ok(); // Load .env
     tracing_subscriber::fmt::init();
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = CorsLayer::permissive();
 
     let app = Router::new()
         .route("/health", get(health_check))
