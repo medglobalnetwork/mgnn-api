@@ -65,7 +65,8 @@ async fn main() {
         .route("/auth/onboarding", post(handle_onboarding))
         .layer(cors);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8000));
+    let port: u16 = env::var("PORT").unwrap_or_else(|_| "8000".into()).parse().unwrap_or(8000);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!("Listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
