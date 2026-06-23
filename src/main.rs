@@ -133,7 +133,7 @@ async fn handle_onboarding(Json(payload): Json<OnboardingPayload>) -> (StatusCod
         h.insert("apikey", supabase_key.parse().unwrap());
         h.insert("Authorization", format!("Bearer {}", supabase_key).parse().unwrap());
         h.insert("Content-Type", "application/json".parse().unwrap());
-        h.insert("Prefer", "return=representation".parse().unwrap()); // To return inserted row
+        h.insert("Prefer", "resolution=merge-duplicates,return=representation".parse().unwrap()); // Upsert and return row
         h
     };
 
@@ -153,7 +153,7 @@ async fn handle_onboarding(Json(payload): Json<OnboardingPayload>) -> (StatusCod
         "onboarding_score": 85
     });
 
-    let res = client.post(format!("{}/rest/v1/users", supabase_url))
+    let res = client.post(format!("{}/rest/v1/users?on_conflict=firebase_uid", supabase_url))
         .headers(headers.clone())
         .json(&user_payload)
         .send()
@@ -192,9 +192,8 @@ async fn handle_onboarding(Json(payload): Json<OnboardingPayload>) -> (StatusCod
         "interests": payload.interests.unwrap_or_default()
     });
 
-    let res = client.post(format!("{}/rest/v1/profiles", supabase_url))
+    let res = client.post(format!("{}/rest/v1/profiles?on_conflict=id", supabase_url))
         .headers(headers.clone())
-        // For profiles we don't need representation back necessarily, but let's keep headers
         .json(&profile_payload)
         .send()
         .await;
