@@ -24,6 +24,22 @@ struct VerifyResponse {
 }
 
 #[derive(Deserialize, Debug)]
+struct EducationPayload {
+    college: String,
+    course: String,
+    year: String,
+    skills: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct ExperiencePayload {
+    company: String,
+    designation: String,
+    specialization: String,
+    skills: String,
+}
+
+#[derive(Deserialize, Debug)]
 struct OnboardingPayload {
     firebase_uid: String,
     email: String,
@@ -35,6 +51,10 @@ struct OnboardingPayload {
     city: String,
     headline: String,
     bio: String,
+    interests: Option<Vec<String>>,
+    education: Option<EducationPayload>,
+    experience: Option<ExperiencePayload>,
+    referred_by: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -118,12 +138,19 @@ async fn handle_onboarding(Json(payload): Json<OnboardingPayload>) -> (StatusCod
     };
 
     // 1. Insert into users
+    let name_part = payload.name.split_whitespace().next().unwrap_or("MGN").to_uppercase().replace(|c: char| !c.is_alphanumeric(), "");
+    let uid_part = if payload.firebase_uid.len() >= 4 { &payload.firebase_uid[..4] } else { "0000" }.to_uppercase();
+    let referral_code = format!("{}{}", name_part, uid_part);
+
     let user_payload = json!({
         "firebase_uid": payload.firebase_uid,
         "email": payload.email,
         "phone": payload.phone,
         "account_type": payload.account_type,
-        "status": "active"
+        "status": "active",
+        "referral_code": referral_code,
+        "referred_by": payload.referred_by,
+        "onboarding_score": 85
     });
 
     let res = client.post(format!("{}/rest/v1/users", supabase_url))
@@ -161,7 +188,8 @@ async fn handle_onboarding(Json(payload): Json<OnboardingPayload>) -> (StatusCod
         "bio": payload.bio,
         "city": payload.city,
         "country": payload.country,
-        "headline": payload.headline
+        "headline": payload.headline,
+        "interests": payload.interests.unwrap_or_default()
     });
 
     let res = client.post(format!("{}/rest/v1/profiles", supabase_url))
@@ -195,6 +223,39 @@ async fn handle_onboarding(Json(payload): Json<OnboardingPayload>) -> (StatusCod
             let err_text = response.text().await.unwrap_or_default();
             tracing::error!("Identity Insert Error: {}", err_text);
         }
+    }
+
+    // 4. Insert into education (if provided)
+    if let Some(edu) = payload.education {
+        let edu_payload = json!({
+            "user_id": user_id,
+            "institution_name": edu.college,
+            "degree": edu.course,
+            "field_of_study": edu.skills,
+            "start_date": format!("{}-01-01", edu.year)
+        });
+        
+        let _ = client.post(format!("{}/rest/v1/education", supabase_url))
+            .headers(headers.clone())
+            .json(&edu_payload)
+            .send()
+            .await;
+    }
+
+    // 5. Insert into experience (if provided)
+    if let Some(exp) = payload.experience {
+        let exp_payload = json!({
+            "user_id": user_id,
+            "company_name": exp.company,
+            "title": exp.designation,
+            "description": format!("Specialization: {}. Skills: {}", exp.specialization, exp.skills)
+        });
+
+        let _ = client.post(format!("{}/rest/v1/experience", supabase_url))
+            .headers(headers.clone())
+            .json(&exp_payload)
+            .send()
+            .await;
     }
 
     (
