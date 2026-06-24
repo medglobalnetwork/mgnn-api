@@ -1,0 +1,16 @@
+{
+  "firebase_uid": "test_uid_555",
+  "email": "test555@example.com",
+  "phone": "",
+  "account_type": "individual",
+  "category": "student",
+  "name": "Test User",
+  "country": "India",
+  "city": "Delhi",
+  "headline": "Test Student",
+  "bio": "",
+  "interests": ["Jobs", "Learning"],
+  "education": null,
+  "experience": null,
+  "referred_by": ""
+}
