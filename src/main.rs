@@ -2,6 +2,7 @@ use axum::{
     routing::{get, post},
     Router,
     Json,
+    extract::Path,
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
@@ -29,8 +30,8 @@ struct ApiResponse {
 
 #[derive(Serialize)]
 struct StatsResponse {
-    total_users: i64,
-    verified_professionals: i64,
+    professionals: i64,
+    students: i64,
     organizations: i64,
     active_jobs: i64,
     courses: i64,
@@ -59,18 +60,34 @@ struct ExperiencePayload {
 
 #[derive(Deserialize, Debug)]
 struct OnboardingPayload {
-    id: String, // from auth
+    id: String,
     account_type: String,
-    category: String, 
+    primary_category: String, 
+    sub_category: String,
     name: String,
     country: String,
     city: String,
     headline: String,
     bio: String,
     interests: Option<Vec<String>>,
-    education: Option<EducationPayload>,
-    experience: Option<ExperiencePayload>,
-    referred_by: Option<String>,
+    secondary_roles: Option<Vec<String>>,
+    profile_score: Option<i32>,
+    badge_color: Option<String>,
+    education_data: Option<serde_json::Value>,
+    experience_data: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize, Debug)]
+struct VerificationSubmitPayload {
+    user_id: String,
+    document_type: String,
+    document_url: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct AdminApprovalPayload {
+    user_id: String,
+    badge_color: String,
 }
 
 #[tokio::main]
@@ -85,6 +102,10 @@ async fn main() {
         .route("/auth/sync", post(handle_sync))
         .route("/auth/onboarding", post(handle_onboarding))
         .route("/stats", get(get_stats))
+        .route("/verification/submit", post(submit_verification))
+        .route("/admin/verifications", get(get_pending_verifications))
+        .route("/admin/verifications/approve/:id", post(approve_verification))
+        .route("/admin/verifications/reject/:id", post(reject_verification))
         .layer(cors);
 
     let port: u16 = env::var("PORT").unwrap_or_else(|_| "8000".into()).parse().unwrap_or(8000);
@@ -164,6 +185,11 @@ async fn handle_onboarding(Json(payload): Json<OnboardingPayload>) -> (StatusCod
         "headline": payload.headline,
         "interests": payload.interests.unwrap_or_default(),
         "account_type": payload.account_type,
+        "primary_category": payload.primary_category,
+        "sub_category": payload.sub_category,
+        "secondary_roles": payload.secondary_roles.unwrap_or_default(),
+        "profile_score": payload.profile_score.unwrap_or(0),
+        "badge_color": payload.badge_color.unwrap_or_else(|| "gray".to_string()),
         "profile_completed": true,
         "onboarding_score": 100
     });
@@ -177,7 +203,7 @@ async fn handle_onboarding(Json(payload): Json<OnboardingPayload>) -> (StatusCod
     // Insert into professional_identities
     let identity_payload = json!({
         "user_id": payload.id,
-        "identity_type": payload.category
+        "identity_type": payload.primary_category
     });
 
     let _ = client.post(format!("{}/rest/v1/professional_identities", supabase_url))
@@ -214,8 +240,8 @@ async fn get_stats() -> (StatusCode, Json<StatsResponse>) {
         }
     };
 
-    let total_users = get_count(format!("{}/rest/v1/profiles", supabase_url)).await;
-    let verified = get_count(format!("{}/rest/v1/profiles?verified=eq.true", supabase_url)).await;
+    let professionals = get_count(format!("{}/rest/v1/profiles?account_type=eq.professional", supabase_url)).await;
+    let students = get_count(format!("{}/rest/v1/profiles?account_type=eq.student", supabase_url)).await;
     let orgs = get_count(format!("{}/rest/v1/profiles?account_type=eq.organization", supabase_url)).await;
     let jobs = get_count(format!("{}/rest/v1/jobs?status=eq.open", supabase_url)).await;
     let courses = get_count(format!("{}/rest/v1/courses", supabase_url)).await;
@@ -228,8 +254,8 @@ async fn get_stats() -> (StatusCode, Json<StatsResponse>) {
     let active_users = get_count(format!("{}/rest/v1/profiles?status=eq.active", supabase_url)).await;
 
     (StatusCode::OK, Json(StatsResponse {
-        total_users,
-        verified_professionals: verified,
+        professionals,
+        students,
         organizations: orgs,
         active_jobs: jobs,
         courses,
@@ -239,4 +265,88 @@ async fn get_stats() -> (StatusCode, Json<StatsResponse>) {
         phone_users,
         active_users,
     }))
+}
+
+async fn submit_verification(Json(payload): Json<VerificationSubmitPayload>) -> (StatusCode, Json<ApiResponse>) {
+    let supabase_url = env::var("SUPABASE_URL").unwrap_or_default();
+    let supabase_key = env::var("SUPABASE_SERVICE_ROLE_KEY").unwrap_or_default();
+    let client = reqwest::Client::new();
+    let mut h = reqwest::header::HeaderMap::new();
+    h.insert("apikey", supabase_key.parse().unwrap());
+    h.insert("Authorization", format!("Bearer {}", supabase_key).parse().unwrap());
+    h.insert("Content-Type", "application/json".parse().unwrap());
+
+    let req_payload = json!({
+        "user_id": payload.user_id,
+        "document_type": payload.document_type,
+        "document_url": payload.document_url,
+        "status": "Pending"
+    });
+
+    let res = client.post(format!("{}/rest/v1/verification_requests", supabase_url))
+        .headers(h)
+        .json(&req_payload)
+        .send()
+        .await;
+
+    match res {
+        Ok(r) if r.status().is_success() => (StatusCode::OK, Json(ApiResponse { status: "success".into(), message: "Submitted".into() })),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse { status: "error".into(), message: "Failed to submit".into() }))
+    }
+}
+
+async fn get_pending_verifications() -> (StatusCode, Json<serde_json::Value>) {
+    let supabase_url = env::var("SUPABASE_URL").unwrap_or_default();
+    let supabase_key = env::var("SUPABASE_SERVICE_ROLE_KEY").unwrap_or_default();
+    let client = reqwest::Client::new();
+    let mut h = reqwest::header::HeaderMap::new();
+    h.insert("apikey", supabase_key.parse().unwrap());
+    h.insert("Authorization", format!("Bearer {}", supabase_key).parse().unwrap());
+
+    let url = format!("{}/rest/v1/verification_requests?status=eq.Pending&select=*,profiles(full_name,email,account_type,primary_category)", supabase_url);
+    if let Ok(res) = client.get(&url).headers(h).send().await {
+        if let Ok(json) = res.json::<serde_json::Value>().await {
+            return (StatusCode::OK, Json(json));
+        }
+    }
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!([])))
+}
+
+async fn approve_verification(Path(id): Path<String>, Json(payload): Json<AdminApprovalPayload>) -> (StatusCode, Json<ApiResponse>) {
+    let supabase_url = env::var("SUPABASE_URL").unwrap_or_default();
+    let supabase_key = env::var("SUPABASE_SERVICE_ROLE_KEY").unwrap_or_default();
+    let client = reqwest::Client::new();
+    let mut h = reqwest::header::HeaderMap::new();
+    h.insert("apikey", supabase_key.parse().unwrap());
+    h.insert("Authorization", format!("Bearer {}", supabase_key).parse().unwrap());
+    h.insert("Content-Type", "application/json".parse().unwrap());
+
+    let _ = client.patch(format!("{}/rest/v1/verification_requests?id=eq.{}", supabase_url, id))
+        .headers(h.clone())
+        .json(&json!({"status": "Approved", "reviewed_at": chrono::Utc::now().to_rfc3339()}))
+        .send().await;
+
+    let _ = client.patch(format!("{}/rest/v1/profiles?id=eq.{}", supabase_url, payload.user_id))
+        .headers(h)
+        .json(&json!({"verified": true, "badge_color": payload.badge_color}))
+        .send().await;
+
+    (StatusCode::OK, Json(ApiResponse { status: "success".into(), message: "Approved".into() }))
+}
+
+async fn reject_verification(Path(id): Path<String>) -> (StatusCode, Json<ApiResponse>) {
+    let supabase_url = env::var("SUPABASE_URL").unwrap_or_default();
+    let supabase_key = env::var("SUPABASE_SERVICE_ROLE_KEY").unwrap_or_default();
+    let client = reqwest::Client::new();
+    let mut h = reqwest::header::HeaderMap::new();
+    h.insert("apikey", supabase_key.parse().unwrap());
+    h.insert("Authorization", format!("Bearer {}", supabase_key).parse().unwrap());
+    h.insert("Content-Type", "application/json".parse().unwrap());
+
+    let _ = client.patch(format!("{}/rest/v1/verification_requests?id=eq.{}", supabase_url, id))
+        .headers(h)
+        .json(&json!({"status": "Rejected", "reviewed_at": chrono::Utc::now().to_rfc3339()}))
+        .send().await;
+
+    (StatusCode::OK, Json(ApiResponse { status: "success".into(), message: "Rejected".into() }))
 }
