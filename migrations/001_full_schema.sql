@@ -22,10 +22,10 @@ $$ LANGUAGE plpgsql;
 -- 1. PROFILES  (core identity table)
 -- =============================================================
 CREATE TABLE IF NOT EXISTS profiles (
-    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id              UUID PRIMARY KEY,             -- matches auth.users(id) or firebase uid
     auth_id         UUID UNIQUE,
     email           TEXT UNIQUE NOT NULL,
-    full_name       TEXT NOT NULL,
+    full_name       TEXT NOT NULL DEFAULT '',
     phone           TEXT,
     phone_verified  BOOLEAN DEFAULT FALSE,
     email_verified  BOOLEAN DEFAULT FALSE,
@@ -34,24 +34,32 @@ CREATE TABLE IF NOT EXISTS profiles (
     provider        TEXT DEFAULT 'email',
     status          TEXT DEFAULT 'active',      -- active | suspended | deactivated | pending_deletion
     account_status  TEXT DEFAULT 'active',      -- alias for status (some routes use this)
-    account_type    TEXT DEFAULT 'professional', -- professional | organization | admin
+    account_type    TEXT,                        -- professional | organization | admin
     role            TEXT DEFAULT 'user',         -- user | admin | super_admin
     username        TEXT UNIQUE,                 -- handle for @mention
     preferred_name  TEXT,                        -- display name override
     country         TEXT,
+    city            TEXT,                        -- city name
     timezone        TEXT DEFAULT 'Asia/Kolkata',
     profile_completed BOOLEAN DEFAULT FALSE,
     completion_score INTEGER DEFAULT 0,
+    onboarding_score INTEGER DEFAULT 0,          -- set to 100 after onboarding completes
+    badge_color     TEXT DEFAULT 'gray',         -- gray | green | blue | gold
     language        TEXT DEFAULT 'en',
     dialect         TEXT,
     bio             TEXT,
     headline        TEXT,
     location        TEXT,
+    company         TEXT,                        -- current organization
     website         TEXT,
     avatar_url      TEXT,
     cover_url       TEXT,
     primary_category TEXT,
     subcategory     TEXT,
+    sub_category    TEXT,                        -- alias for subcategory
+    interests       JSONB DEFAULT '[]',          -- array of skill/topic strings
+    secondary_roles JSONB DEFAULT '[]',          -- array of role strings
+    verified        BOOLEAN DEFAULT FALSE,       -- profile verified by admin
     two_fa_enabled  BOOLEAN DEFAULT FALSE,
     two_fa_methods  JSONB DEFAULT '[]',
     last_active     TIMESTAMPTZ DEFAULT NOW(),

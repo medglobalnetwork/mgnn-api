@@ -135,6 +135,7 @@ async fn handle_sync(Json(payload): Json<SyncPayload>) -> (StatusCode, Json<ApiR
 
     // Insert into profiles
     let profile_payload = json!({
+        "id": payload.auth_id,
         "auth_id": payload.auth_id,
         "firebase_uid": payload.firebase_uid,
         "email": payload.email,
@@ -186,8 +187,9 @@ async fn handle_onboarding(Json(payload): Json<OnboardingPayload>) -> (StatusCod
         "account_type": payload.account_type,
         "primary_category": payload.primary_category,
         "sub_category": payload.sub_category,
+        "subcategory": payload.sub_category,
         "secondary_roles": payload.secondary_roles.unwrap_or_default(),
-        "profile_score": payload.profile_score.unwrap_or(0),
+        "completion_score": payload.profile_score.unwrap_or(0),
         "badge_color": payload.badge_color.unwrap_or_else(|| "gray".to_string()),
         "profile_completed": true,
         "onboarding_score": 100
