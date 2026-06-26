@@ -1,0 +1,29 @@
+pub mod config;
+pub mod extractors;
+pub mod error;
+pub mod state;
+
+pub mod modules {
+    pub mod permission;
+    pub mod media;
+    pub mod audit;
+    pub mod jobs;
+    pub mod identity;
+    pub mod profile;
+    pub mod relationship;
+    pub mod content;
+    pub mod search;
+    pub mod communication;
+    pub mod trust;
+    pub mod settings;
+    pub mod organization;
+    pub mod admin;
+    pub mod flags;
+    pub mod recommendation;
+    pub mod analytics;
+    pub mod events;
+    pub mod consent;
+    pub mod localization;
+}
+
+pub mod router;

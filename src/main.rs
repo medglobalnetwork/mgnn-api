@@ -1,16 +1,24 @@
-use axum::{
-    routing::{get, post},
-    Router,
-    Json,
-    extract::Path,
-    http::StatusCode,
-};
+use axum::{Router, http::StatusCode};
+use axum::extract::{Json, Path};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber;
+use tracing::info;
 use std::env;
+
+use crate::config::Config;
+use crate::error::ApiError;
+use crate::state::AppState;
+
+mod modules;
+mod router;
+mod state;
+mod error;
+mod config;
+mod extractors;
 
 #[derive(Deserialize, Debug)]
 struct SyncPayload {
@@ -43,22 +51,6 @@ struct StatsResponse {
 }
 
 #[derive(Deserialize, Debug)]
-struct EducationPayload {
-    college: String,
-    course: String,
-    year: String,
-    skills: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct ExperiencePayload {
-    company: String,
-    designation: String,
-    specialization: String,
-    skills: String,
-}
-
-#[derive(Deserialize, Debug)]
 struct OnboardingPayload {
     id: String,
     account_type: String,
@@ -73,8 +65,6 @@ struct OnboardingPayload {
     secondary_roles: Option<Vec<String>>,
     profile_score: Option<i32>,
     badge_color: Option<String>,
-    education_data: Option<serde_json::Value>,
-    experience_data: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -91,28 +81,37 @@ struct AdminApprovalPayload {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), ApiError> {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
-    let cors = CorsLayer::permissive();
+    let config = Config::from_env();
+    let state = AppState::new(config);
+
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
     let app = Router::new()
-        .route("/health", get(health_check))
-        .route("/auth/sync", post(handle_sync))
-        .route("/auth/onboarding", post(handle_onboarding))
-        .route("/stats", get(get_stats))
-        .route("/verification/submit", post(submit_verification))
-        .route("/admin/verifications", get(get_pending_verifications))
-        .route("/admin/verifications/approve/:id", post(approve_verification))
-        .route("/admin/verifications/reject/:id", post(reject_verification))
-        .layer(cors);
+        .route("/health", axum::routing::get(health_check))
+        .route("/auth/sync", axum::routing::post(handle_sync))
+        .route("/auth/onboarding", axum::routing::post(handle_onboarding))
+        .route("/stats", axum::routing::get(get_stats))
+        .route("/verification/submit", axum::routing::post(submit_verification))
+        .route("/admin/verifications", axum::routing::get(get_pending_verifications))
+        .route("/admin/verifications/approve/:id", axum::routing::post(approve_verification))
+        .route("/admin/verifications/reject/:id", axum::routing::post(reject_verification))
+        .nest("/v1", router::api_routes())
+        .layer(cors)
+        .with_state(Arc::new(state));
 
     let port: u16 = env::var("PORT").unwrap_or_else(|_| "8000".into()).parse().unwrap_or(8000);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    tracing::info!("Listening on {}", addr);
+    info!("Listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
+    Ok(())
 }
 
 async fn health_check() -> &'static str {
