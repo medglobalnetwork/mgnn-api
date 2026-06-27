@@ -62,8 +62,8 @@ async fn signup_email(
         return Err(ApiError::BadRequest("Password must be at least 8 characters".into()));
     }
 
-    // Check if email already exists
-    let check_url = format!("{}/rest/v1/profiles?email=eq.{}&select=id", state.rest_url(), payload.email);
+    // Check if email already exists in users table
+    let check_url = format!("{}/rest/v1/users?email=eq.{}&select=id", state.rest_url(), payload.email);
     let check_res = state.http.get(&check_url).headers(state.supabase_headers()).send().await?;
     let existing: serde_json::Value = check_res.json().await?;
     if let Some(arr) = existing.as_array() {
@@ -81,86 +81,62 @@ async fn signup_email(
     ).map_err(|e| ApiError::Internal(format!("Password hash error: {e}")))?;
 
     let user_id = uuid::Uuid::new_v4().to_string();
-    let profile_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
 
-    // Insert into profiles table
-    let profile_payload = json!({
-        "id": profile_id,
-        "auth_id": user_id,
+    // Insert into users table
+    let user_payload = json!({
+        "id": user_id,
         "email": payload.email,
-        "full_name": payload.full_name,
-        "provider": "email",
-        "email_verified": false,
-        "profile_completed": false,
+        "password_hash": hash.to_string(),
         "status": "active",
-        "account_type": "professional",
-        "created_at": chrono::Utc::now().to_rfc3339()
+        "primary_login_method": "email",
+        "email_verified": false,
+        "phone_verified": false,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "updated_at": chrono::Utc::now().to_rfc3339()
     });
 
-    let profile_url = format!("{}/rest/v1/profiles", state.rest_url());
-    let profile_res = state.http.post(&profile_url).headers(state.supabase_headers()).json(&profile_payload).send().await?;
-    if !profile_res.status().is_success() {
-        let err = profile_res.text().await.unwrap_or_default();
-        tracing::error!("Profile insert error: {}", err);
-        return Err(ApiError::Internal("Failed to create profile".into()));
+    let user_url = format!("{}/rest/v1/users", state.rest_url());
+    let user_res = state.http.post(&user_url).headers(state.supabase_headers()).json(&user_payload).send().await?;
+    if !user_res.status().is_success() {
+        let err = user_res.text().await.unwrap_or_default();
+        tracing::error!("User insert error: {}", err);
+        return Err(ApiError::Internal("Failed to create user".into()));
     }
 
-    // Insert into security_settings
-    let sec_payload = json!({
-        "user_id": profile_id,
-        "password_hash": hash.to_string(),
-        "password_strength": compute_password_strength(&payload.password),
-        "two_fa_enabled": false,
-        "two_fa_methods": [],
-        "created_at": chrono::Utc::now().to_rfc3339()
+    // Insert into auth_identities table
+    let auth_id_payload = json!({
+        "user_id": user_id,
+        "provider": "email",
+        "provider_user_id": payload.email,
+        "provider_email": payload.email,
+        "linked_at": chrono::Utc::now().to_rfc3339()
     });
-    let sec_url = format!("{}/rest/v1/security_settings", state.rest_url());
-    let _ = state.http.post(&sec_url).headers(state.supabase_headers()).json(&sec_payload).send().await;
+    let auth_id_url = format!("{}/rest/v1/auth_identities", state.rest_url());
+    let _ = state.http.post(&auth_id_url).headers(state.supabase_headers()).json(&auth_id_payload).send().await;
 
     // Create session
     let session_payload = json!({
         "id": session_id,
-        "user_id": profile_id,
+        "user_id": user_id,
+        "refresh_token_hash": "placeholder_until_refresh_logic", // Will be updated during refresh generation
         "device_name": "Unknown",
         "browser": "Unknown",
         "os": "Unknown",
-        "ip_masked": "0.0.0.xxx",
+        "ip_address": "0.0.0.0",
         "is_current": true,
         "created_at": chrono::Utc::now().to_rfc3339(),
-        "last_active": chrono::Utc::now().to_rfc3339()
+        "last_active": chrono::Utc::now().to_rfc3339(),
+        "expires_at": (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339()
     });
-    let sess_url = format!("{}/rest/v1/user_sessions", state.rest_url());
+    let sess_url = format!("{}/rest/v1/sessions", state.rest_url());
     let _ = state.http.post(&sess_url).headers(state.supabase_headers()).json(&session_payload).send().await;
 
-    // Create connected_accounts entry
-    let conn_payload = json!({
-        "user_id": profile_id,
-        "provider": "email",
-        "provider_account_id": payload.email,
-        "is_primary": true,
-        "connected_at": chrono::Utc::now().to_rfc3339()
-    });
-    let conn_url = format!("{}/rest/v1/connected_accounts", state.rest_url());
-    let _ = state.http.post(&conn_url).headers(state.supabase_headers()).json(&conn_payload).send().await;
-
-    // Generate OTP for email verification
-    let otp = generate_otp_code();
-    let otp_payload = json!({
-        "user_id": profile_id,
-        "code": otp,
-        "purpose": "email_verify",
-        "expires_at": (chrono::Utc::now() + chrono::Duration::minutes(10)).to_rfc3339(),
-        "used": false
-    });
-    let otp_url = format!("{}/rest/v1/otp_verifications", state.rest_url());
-    let _ = state.http.post(&otp_url).headers(state.supabase_headers()).json(&otp_payload).send().await;
-
     // Generate JWT tokens
-    let access_token = create_access_token(&profile_id, &profile_id, "professional", &session_id, &state.config)?;
-    let refresh_token = create_refresh_token(&profile_id, &session_id, &state.config)?;
+    let access_token = create_access_token(&user_id, &user_id, "user", &session_id, &state.config)?;
+    let refresh_token = create_refresh_token(&user_id, &session_id, &state.config)?;
 
-    audit::log_action(&profile_id, "auth.signup_email", "profile", &profile_id).await;
+    audit::log_action(&user_id, "auth.signup_email", "user", &user_id).await;
 
     ok_json(json!({
         "access_token": access_token,
@@ -168,14 +144,11 @@ async fn signup_email(
         "token_type": "Bearer",
         "expires_in": state.config.access_token_ttl_secs,
         "user": {
-            "id": profile_id,
+            "id": user_id,
             "email": payload.email,
             "full_name": payload.full_name,
-            "email_verified": false,
-            "profile_completed": false
-        },
-        "otp_required": true,
-        "otp_purpose": "email_verify"
+            "email_verified": false
+        }
     }))
 }
 
